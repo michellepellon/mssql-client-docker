@@ -9,6 +9,10 @@ HADOLINT_IMAGE="hadolint/hadolint:v2.14.0-alpine"
 MSSQL_SERVER_IMAGE="${MSSQL_SERVER_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Single source of truth for the pinned version is the Dockerfile ARG.
+SQLCMD_VERSION="$(sed -n 's/^ARG SQLCMD_VERSION=v//p' "${SCRIPT_DIR}/Dockerfile")"
+: "${SQLCMD_VERSION:?could not read SQLCMD_VERSION from ${SCRIPT_DIR}/Dockerfile}"
+
 usage() {
     cat <<EOF
 Usage: ./test.sh [stage...]
@@ -19,7 +23,8 @@ Stages (default: all three, in order):
   e2e          Start a real SQL Server container and run a query through the client.
 
 Environment:
-  IMAGE        Image tag to build/test (default: mssql-client:test)
+  IMAGE               Image tag to build/test (default: mssql-client:test)
+  MSSQL_SERVER_IMAGE  Server image for e2e (default: mcr.microsoft.com/mssql/server:2022-latest)
 
 Examples:
   ./test.sh                # full suite
@@ -33,14 +38,15 @@ FAIL=0
 declare -a FAILURES=()
 
 check() {
-    local desc="$1"
+    local desc="$1" out
     shift
-    if "$@" >/dev/null 2>&1; then
+    if out="$("$@" 2>&1)"; then
         echo "  ok: ${desc}"
         PASS=$((PASS + 1))
     else
         echo "  FAIL: ${desc}"
         echo "        command: $*"
+        tail -n 20 <<<"${out}" | sed 's/^/        /'
         FAIL=$((FAIL + 1))
         FAILURES+=("${desc}")
     fi
@@ -64,7 +70,6 @@ check_output() {
 
 stage_unit() {
     echo "== unit: hadolint =="
-    check "Dockerfile exists" test -f "${SCRIPT_DIR}/Dockerfile"
     check "Dockerfile passes hadolint" \
         bash -c "docker run --rm -i '${HADOLINT_IMAGE}' hadolint - <'${SCRIPT_DIR}/Dockerfile'"
 }
@@ -73,30 +78,36 @@ stage_integration() {
     echo "== integration: build + structure =="
     check "image builds" docker build -t "${IMAGE}" "${SCRIPT_DIR}"
 
-    check_output "runs as non-root uid 65532" "65532" \
+    check_output "runs as non-root uid 65532" '^65532:65532$' \
         docker inspect --format '{{.Config.User}}' "${IMAGE}"
     check_output "entrypoint is sqlcmd" "sqlcmd" \
         docker inspect --format '{{json .Config.Entrypoint}}' "${IMAGE}"
 
-    check_output "sqlcmd reports pinned version" "1.10.0" \
+    check_output "sqlcmd reports pinned version" "${SQLCMD_VERSION//./\\.}" \
         docker run --rm "${IMAGE}" --version
-
-    # Distroless guarantees: no shell, no package manager.
-    check "no /bin/sh in image" \
-        bash -c "! docker run --rm --entrypoint /bin/sh '${IMAGE}' -c true 2>/dev/null"
-    check "no apk/apt in image" \
-        bash -c "! docker run --rm --entrypoint /sbin/apk '${IMAGE}' 2>/dev/null && ! docker run --rm --entrypoint /usr/bin/apt '${IMAGE}' 2>/dev/null"
-
     check "works with read-only rootfs" \
         docker run --rm --read-only "${IMAGE}" --version
 
+    # A full filesystem listing proves the minimality claims positively,
+    # instead of probing a few hardcoded paths.
+    local cid listing
+    listing="$(mktemp)"
+    if cid=$(docker create "${IMAGE}" 2>/dev/null); then
+        docker export "${cid}" | tar -tf - | sort >"${listing}"
+        docker rm "${cid}" >/dev/null
+    fi
+    check "image contains the sqlcmd binary" \
+        grep -qx 'usr/local/bin/sqlcmd' "${listing}"
     check "upstream NOTICE.md is shipped" \
-        bash -c "docker create --name mssql-client-notice-check '${IMAGE}' >/dev/null && docker cp mssql-client-notice-check:/usr/share/doc/sqlcmd/NOTICE.md - >/dev/null; rc=\$?; docker rm -f mssql-client-notice-check >/dev/null; exit \$rc"
+        grep -qx 'usr/share/doc/sqlcmd/NOTICE.md' "${listing}"
+    check "no shell or package manager anywhere in the filesystem" \
+        bash -c "! grep -E '(^|/)(sh|bash|ash|dash|busybox|apk|apt|apt-get|dpkg)\$' '${listing}'"
+    rm -f "${listing}"
 
     local size
-    size=$(docker inspect --format '{{.Size}}' "${IMAGE}")
-    check "image under 50MB (actual: $((size / 1024 / 1024))MB)" \
-        test "${size}" -lt $((50 * 1024 * 1024))
+    size=$(docker inspect --format '{{.Size}}' "${IMAGE}" 2>/dev/null || echo 0)
+    check "image size sane (actual: $((size / 1024 / 1024))MB)" \
+        bash -c "[ '${size}' -gt 0 ] && [ '${size}' -lt $((50 * 1024 * 1024)) ]"
 }
 
 E2E_NET="mssql-e2e-net"
@@ -129,7 +140,7 @@ stage_e2e() {
     local ready=false
     for _ in $(seq 1 60); do
         if docker run --rm --network "${net}" -e "SQLCMDPASSWORD=${sa_password}" "${IMAGE}" \
-            -S "${server}" -U sa -C -Q "SELECT 1" >/dev/null 2>&1; then
+            -S "${server}" -U sa -C -b -Q "SELECT 1" >/dev/null 2>&1; then
             ready=true
             break
         fi
@@ -147,27 +158,31 @@ stage_e2e() {
     PASS=$((PASS + 1))
     echo "  ok: SQL Server reachable via client image"
 
+    # -b makes sqlcmd exit nonzero on SQL errors, so these checks cannot
+    # pass on error text that happens to contain the expected pattern.
     check_output "query returns server version" "Microsoft SQL Server" \
         docker run --rm --network "${net}" -e "SQLCMDPASSWORD=${sa_password}" "${IMAGE}" \
-        -S "${server}" -U sa -C -Q "SELECT @@VERSION"
+        -S "${server}" -U sa -C -b -Q "SELECT @@VERSION"
 
-    check_output "query works with read-only rootfs" "3" \
+    check_output "query works with read-only rootfs" '^ *3 *$' \
         docker run --rm --read-only --network "${net}" -e "SQLCMDPASSWORD=${sa_password}" "${IMAGE}" \
-        -S "${server}" -U sa -C -h -1 -Q "SET NOCOUNT ON; SELECT 1+2"
+        -S "${server}" -U sa -C -b -h -1 -Q "SET NOCOUNT ON; SELECT 1+2"
 }
 
 main() {
+    for s in "$@"; do
+        case "${s}" in
+            unit|integration|e2e) ;;
+            -h|--help) usage; exit 0 ;;
+            *) echo "unknown stage: ${s}" >&2; usage >&2; exit 2 ;;
+        esac
+    done
+
     local stages=("$@")
     [[ ${#stages[@]} -eq 0 ]] && stages=(unit integration e2e)
 
     for s in "${stages[@]}"; do
-        case "${s}" in
-            unit) stage_unit ;;
-            integration) stage_integration ;;
-            e2e) stage_e2e ;;
-            -h|--help) usage; exit 0 ;;
-            *) echo "unknown stage: ${s}" >&2; usage >&2; exit 2 ;;
-        esac
+        "stage_${s}"
     done
 
     echo

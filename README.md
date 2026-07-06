@@ -6,13 +6,13 @@
 A minimal, hardened Docker image for connecting to SQL Server / Azure SQL,
 built on Microsoft's statically linked [go-sqlcmd](https://github.com/microsoft/go-sqlcmd).
 
-**~9 MB. No shell. No package manager. No libc. Non-root. Read-only-rootfs compatible.**
+**~26 MB on disk (~9 MB compressed pull). No shell. No package manager. No libc. Non-root. Read-only-rootfs compatible.**
 
 ## Security properties
 
 | Property | How |
 |---|---|
-| Minimal attack surface | `gcr.io/distroless/static-debian12` runtime: the image contains the `sqlcmd` binary, CA certificates, tzdata, and nothing else — no shell, no package manager, no coreutils |
+| Minimal attack surface | `gcr.io/distroless/static-debian12` runtime: the `sqlcmd` binary, CA certificates, tzdata, the upstream NOTICE, and little else — no shell, no package manager, no coreutils |
 | Non-root | Runs as `nonroot` (uid/gid 65532), stated explicitly in the Dockerfile |
 | Supply-chain pinning | Both base images pinned by digest; the upstream release tarball is verified against a per-architecture SHA-256 before extraction |
 | Verified at build time | The extracted binary must execute and report its version or the build fails |
@@ -32,7 +32,9 @@ docker buildx build --platform linux/amd64,linux/arm64 -t mssql-client .
 ## Usage
 
 Pass the password via `SQLCMDPASSWORD` — never `-P` on the command line, where
-it leaks into shell history and `docker inspect`:
+it leaks into shell history and host process listings. (Either way the value is
+readable via `docker inspect` while the container exists; scope inspect access
+accordingly.)
 
 ```sh
 # interactive session
@@ -50,9 +52,10 @@ docker run --rm --read-only -e SQLCMDPASSWORD \
 ```
 
 Server certificate trust: the image trusts the standard public CA bundle. For
-servers with private-CA or self-signed certificates, prefer mounting the CA
-certificate and pointing sqlcmd at it; `-C` (trust server certificate)
-disables verification and belongs in test environments only.
+servers with a private CA, mount your bundle read-only over
+`/etc/ssl/certs/ca-certificates.crt` (or mount it anywhere and set
+`-e SSL_CERT_FILE=/path/ca.pem` — Go's TLS stack honors it). `-C` (trust server
+certificate) disables verification and belongs in test environments only.
 
 ## Test
 
@@ -73,5 +76,5 @@ client image against it, including with a read-only root filesystem.
 2. Download `sqlcmd-linux-amd64.tar.bz2` and `sqlcmd-linux-arm64.tar.bz2`,
    compute `sha256sum` for each (upstream publishes no checksum file).
 3. Update `SQLCMD_VERSION`, `SQLCMD_SHA256_AMD64`, and `SQLCMD_SHA256_ARM64`
-   in the Dockerfile, and the version assertion in `test.sh`.
+   in the Dockerfile (`test.sh` derives the expected version from it).
 4. `./test.sh`

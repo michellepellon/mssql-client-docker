@@ -29,6 +29,7 @@ RUN set -eux; \
     mkdir -p /out; \
     tar -xjf /tmp/sqlcmd.tar.bz2 -C /out sqlcmd NOTICE.md; \
     chmod 0755 /out/sqlcmd; \
+    # Runs the target-arch binary: cross-platform builds need binfmt/QEMU.
     /out/sqlcmd --version
 
 # --- runtime stage: distroless static, non-root, nothing but the binary ------
@@ -47,7 +48,6 @@ COPY --from=fetch /out/NOTICE.md /usr/share/doc/sqlcmd/NOTICE.md
 # The base is already non-root (uid 65532); restated so scanners and humans
 # can verify it without inspecting the base image.
 USER 65532:65532
-WORKDIR /home/nonroot
 
 ENTRYPOINT ["/usr/local/bin/sqlcmd"]
 CMD ["--help"]
