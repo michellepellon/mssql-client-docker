@@ -16,7 +16,7 @@ built on Microsoft's statically linked [go-sqlcmd](https://github.com/microsoft/
 | Non-root | Runs as `nonroot` (uid/gid 65532), stated explicitly in the Dockerfile |
 | Supply-chain pinning | Both base images pinned by digest; the upstream release tarball is verified against a per-architecture SHA-256 before extraction |
 | Verified at build time | The extracted binary must execute and report its version or the build fails |
-| Encrypted by default | go-sqlcmd negotiates TLS with the server; use `--encrypt strict` (TDS 8.0) where supported |
+| Encrypted by default | go-sqlcmd negotiates TLS with the server; use `-N strict` (TDS 8.0) where supported |
 | Immutable runtime | Works under `docker run --read-only` (add `--tmpfs /home/nonroot` only if you use `sqlcmd config`) |
 | License compliance | Upstream `NOTICE.md` shipped at `/usr/share/doc/sqlcmd/NOTICE.md` |
 

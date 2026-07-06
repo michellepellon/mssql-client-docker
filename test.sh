@@ -5,8 +5,8 @@
 set -euo pipefail
 
 IMAGE="${IMAGE:-mssql-client:test}"
-HADOLINT_IMAGE="hadolint/hadolint:latest-alpine"
-MSSQL_SERVER_IMAGE="mcr.microsoft.com/mssql/server:2022-latest"
+HADOLINT_IMAGE="hadolint/hadolint:v2.14.0-alpine"
+MSSQL_SERVER_IMAGE="${MSSQL_SERVER_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {

@@ -1,6 +1,5 @@
 # ABOUTME: Minimal, hardened MSSQL client image: Microsoft's statically linked
 # ABOUTME: go-sqlcmd on distroless/static — no shell, no package manager, non-root.
-# syntax=docker/dockerfile:1
 
 # Renovate/dependabot-friendly single source of truth for the upstream release.
 ARG SQLCMD_VERSION=v1.10.0
@@ -39,7 +38,7 @@ ARG SQLCMD_VERSION
 LABEL org.opencontainers.image.title="mssql-client" \
       org.opencontainers.image.description="Minimal non-root MSSQL client (go-sqlcmd) on distroless/static" \
       org.opencontainers.image.version="${SQLCMD_VERSION}" \
-      org.opencontainers.image.source="https://github.com/microsoft/go-sqlcmd" \
+      org.opencontainers.image.source="https://github.com/michellepellon/mssql-client-docker" \
       org.opencontainers.image.licenses="MIT"
 
 COPY --from=fetch /out/sqlcmd /usr/local/bin/sqlcmd
