@@ -1,0 +1,4 @@
+# ABOUTME: Excludes everything from the build context except the Dockerfile —
+# ABOUTME: the image is built entirely from pinned remote artifacts.
+*
+!Dockerfile
